@@ -1,0 +1,106 @@
+#!/usr/bin/python
+DESCRIPTION = '''Generates all permutations of a given archetype's configuration'''
+
+import argparse
+import os
+import shutil
+import itertools
+import subprocess
+
+DEFAULT_OUTPUT_DIR = os.getcwd()
+
+SPLIT_PARAM = ":"
+SPLIT_PARAM_VALUES = ","
+
+parser = argparse.ArgumentParser(description=DESCRIPTION)
+
+ARTIFACT_ID="artifactId"
+COORDINATES = ["groupId",ARTIFACT_ID,"version"]
+#.capitalzie will lowercase other letters!
+COORDINATES_ARCHETYPE = ["archetype"+coordinate[0].upper()+coordinate[1:] for coordinate in COORDINATES]
+
+COORDINATES_PROJECT_DEFAULTS = dict(zip(COORDINATES,["com.example","example","1.0.0-SNAPSHOT"]))
+
+for name_param in COORDINATES_ARCHETYPE:
+    parser.add_argument(name_param, metavar=name_param.upper(), nargs=1)
+
+parser.add_argument("parameters",metavar="PARAM", nargs="+", help="param"+SPLIT_PARAM+"value1"+SPLIT_PARAM_VALUES+"..."+SPLIT_PARAM_VALUES+"valueN")
+parser.add_argument("--outputDir", dest="outputDir", nargs="?", default=DEFAULT_OUTPUT_DIR, help="Output directory. Current default: "+DEFAULT_OUTPUT_DIR)
+parser.add_argument('--rmOld', action='store_true', help="Delete project directories with same name as generated")
+
+args = parser.parse_args()
+
+def opt(name,value):
+    return '-D'+name+'="'+value.replace('"',r'\"')+'"'
+
+class param():
+    
+    def __init__(self,rawInput):
+        (self.name,paramValues) = rawInput.split(SPLIT_PARAM)
+        self.values = paramValues.split(SPLIT_PARAM_VALUES)
+        
+    def toOptionValues(self):
+        return [opt(self.name,value) for value in self.values]
+
+
+params = [param(x) for x in args.parameters]
+
+#prepare for generation
+def printsep():
+    print "-------"
+
+CHECK_LINES = tuple("["+status+"]" for status in ["ERROR","WARNING"])
+    
+baseCommand = ("mvn archetype:generate -B "
+                    +" ".join(opt(coord,vars(args)[coord][0]) for coord in COORDINATES_ARCHETYPE)+" "
+                    +" ".join(opt(name,value) for (name,value) 
+                              in COORDINATES_PROJECT_DEFAULTS.iteritems() 
+                              if name != "artifactId"))
+
+os.chdir(args.outputDir)
+
+print "STARTING..."
+printsep()
+
+for paramPermutation in itertools.product(*(param.toOptionValues() for param in params)):
+    
+    permutationArtifactId = COORDINATES_PROJECT_DEFAULTS[ARTIFACT_ID]+(".".join(paramPermutation)).replace('"','_').replace("=", "")
+    
+    command = (baseCommand+" "
+               +opt(ARTIFACT_ID,permutationArtifactId)+" "
+               +" ".join(paramPermutation))
+    
+    outputDir = (os.getcwd()+os.path.sep+permutationArtifactId)
+    
+    if os.path.exists(outputDir):
+        if args.rmOld:
+            shutil.rmtree(outputDir)
+        else:
+            print "ABORT: directory already exists: "+outputDir
+            print "Use with --rmOld to automatically delete"
+            break
+    
+    output = subprocess.check_output(command+"; exit 0",stderr=subprocess.STDOUT,shell=True)
+    
+    if "BUILD FAILURE" in output:
+        print output
+        printsep()
+        print "ABORT: something is wrong with the project."
+        break
+    else:
+        printsep()
+        print "Parameters:"
+        print "\n".join(paramPermutation)
+        print "Output directory: "+outputDir
+        printsep()
+        suspiciousLines = [line for line in output.split("\n") if line.startswith(CHECK_LINES)]
+        if len(suspiciousLines) == 0:
+            print "OK"
+        else:
+            print "WARN:"
+            print "\n".join(suspiciousLines)
+        
+        printsep()
+      
+printsep()
+print "DONE"
